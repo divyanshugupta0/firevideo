@@ -264,6 +264,38 @@
             left: 0;
             pointer-events: none;
         }
+
+
+        .modal {
+          display: none;
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.5);
+          z-index: 1000;
+      }
+      
+      .modal-content {
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: white;
+          padding: 20px;
+          border-radius: 8px;
+          max-width: 400px;
+          width: 90%;
+          text-align: center;
+      }
+      
+      .permission-buttons {
+          margin-top: 20px;
+          display: flex;
+          justify-content: center;
+          gap: 10px;
+      }
     </style>
 </head>
 <body>
@@ -488,6 +520,50 @@
               throw error;
           }
       }
+
+      async function checkMediaPermissions() {
+        try {
+            const result = await navigator.permissions.query({ name: 'camera' });
+            const micResult = await navigator.permissions.query({ name: 'microphone' });
+            
+            if (result.state === 'granted' && micResult.state === 'granted') {
+                return true;
+            } else {
+                showPermissionModal();
+                return false;
+            }
+        } catch (error) {
+            console.error('Permission check failed:', error);
+            showPermissionModal();
+            return false;
+        }
+    }
+    
+    function showPermissionModal() {
+        const modal = document.getElementById('permission-modal');
+        modal.style.display = 'block';
+    
+        document.getElementById('allow-permission').onclick = async () => {
+            try {
+                await setupMediaStream(isAudioOnly);
+                modal.style.display = 'none';
+                updateStatus('Media access granted');
+            } catch (error) {
+                document.getElementById('permission-message').textContent = 
+                    'Failed to access devices. Please check browser settings.';
+            }
+        };
+    
+        document.getElementById('deny-permission').onclick = () => {
+            modal.style.display = 'none';
+            updateStatus('Media access denied');
+        };
+    }
+    
+    // Call this before setupMediaStream
+    if (!(await checkMediaPermissions())) {
+        return;
+    }
 
         function initializePeer() {
             updateStatus('Initializing connection...');
