@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Call App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f2f2f2;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .connection-section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .peer-id-display {
+      background: #e9ecef;
+      padding: 15px;
+      border-radius: 5px;
+      margin: 15px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .copy-button {
+      padding: 5px 10px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .video-container {
+      position: relative;
+      background: black;
+      border-radius: 8px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+    }
+
+    .video-container video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .video-label {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.5);
+      color: white;
+      padding: 5px 10px;
+      border-radius: 4px;
+    }
+
+    button {
+      padding: 10px 20px;
+      cursor: pointer;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      margin: 5px;
+    }
+
+    input {
+      padding: 8px;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      width: 200px;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      z-index: 1000;
+      width: 80%;
+      max-width: 300px;
+      text-align: center;
+    }
+
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 999;
+    }
+
+    .permission-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+    }
+
+    .permission-text {
+      margin-bottom: 20px;
+      line-height: 1.4;
+    }
+
+    #allow-permission {
+      background-color: #4CAF50;
+      margin-right: 10px;
+    }
+
+    #deny-permission {
+      background-color: #dc3545;
+    }
+
+    .error-message {
+      color: #dc3545;
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    .status-message {
+      text-align: center;
+      margin: 10px 0;
+      padding: 10px;
+      border-radius: 4px;
+      background: #e9ecef;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Video Call App</h1>
+    
+    <div class="status-message" id="status-message">Initializing...</div>
+    
+    <div class="connection-section">
+      <div class="peer-id-display">
+        <span id="peer-id-text">Your Peer ID: Generating...</span>
+        <button id="copy-id" class="copy-button">Copy ID</button>
+      </div>
+      
+      <div>
+        <input type="text" id="connection-id" placeholder="Enter peer's ID to call">
+        <button id="call-btn">Make Call</button>
+      </div>
+    </div>
+
+    <div class="video-grid">
+      <div class="video-container">
+        <video id="my-video" autoplay playsinline muted></video>
+        <div class="video-label">You</div>
+      </div>
+      <div class="video-container">
+        <video id="peer-video" autoplay playsinline></video>
+        <div class="video-label">Peer</div>
+      </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 20px;">
+      <button id="end-call" style="background-color: #dc3545; display: none;">End Call</button>
+    </div>
+  </div>
+
+  <div id="permission-modal" class="modal">
+    <div class="permission-icon">📹</div>
+    <div class="permission-text">
+      This app needs access to your camera and microphone for video calls.
+    </div>
+    <button id="allow-permission">Allow Access</button>
+    <button id="deny-permission">Deny</button>
+  </div>
+
+  <div id="incoming-call-modal" class="modal">
+    <h3>Incoming Call</h3>
+    <p>Someone is calling you...</p>
+    <button id="accept-call" style="background-color: #4CAF50;">Accept</button>
+    <button id="reject-call" style="background-color: #dc3545;">Reject</button>
+  </div>
+
+  <div class="modal-backdrop"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
+  <script>
+    let peer;
+let localStream;
+let currentCall;
+
+const myVideo = document.getElementById('my-video');
+const peerVideo = document.getElementById('peer-video');
+const callBtn = document.getElementById('call-btn');
+const endCallBtn = document.getElementById('end-call');
+const connectionIdInput = document.getElementById('connection-id');
+const peerIdText = document.getElementById('peer-id-text');
+const copyIdBtn = document.getElementById('copy-id');
+const statusMessage = document.getElementById('status-message');
+const permissionModal = document.getElementById('permission-modal');
+const incomingCallModal = document.getElementById('incoming-call-modal');
+const modalBackdrop = document.querySelector('.modal-backdrop');
+const acceptCallBtn = document.getElementById('accept-call');
+const rejectCallBtn = document.getElementById('reject-call');
+
+function updateStatus(message) {
+    statusMessage.textContent = message;
+}
+
+function showModal(modalElement) {
+    modalElement.style.display = 'block';
+    modalBackdrop.style.display = 'block';
+}
+
+function hideModal(modalElement) {
+    modalElement.style.display = 'none';
+    modalBackdrop.style.display = 'none';
+}
+
+function initializePeer() {
+    updateStatus('Initializing connection...');
+    
+    peer = new Peer({
+        debug: 2
+    });
+
+    peer.on('open', (id) => {
+        console.log('My peer ID is: ' + id);
+        peerIdText.textContent = `Your Peer ID: ${id}`;
+        updateStatus('Ready to connect');
+    });
+
+    peer.on('connection', (conn) => {
+        conn.on('open', () => {
+            updateStatus('Peer connected');
+        });
+    });
+
+    peer.on('call', (call) => {
+        currentCall = call;
+        showModal(incomingCallModal);
+
+        acceptCallBtn.onclick = async () => {
+            hideModal(incomingCallModal);
+            if (!localStream) {
+                const success = await requestMediaAccess();
+                if (!success) return;
+            }
+            call.answer(localStream);
+            handleCall(call);
+        };
+
+        rejectCallBtn.onclick = () => {
+            hideModal(incomingCallModal);
+            call.close();
+        };
+    });
+
+    peer.on('error', (error) => {
+        console.error('Peer error:', error);
+        if (error.type === 'network') {
+            updateStatus('Network error. Check your connection.');
+            peer.reconnect();
+        } else if (error.type === 'peer-unavailable') {
+            updateStatus('Peer not found. Check the ID.');
+        } else {
+            updateStatus('Connection error. Retrying...');
+            peer.reconnect();
+        }
+    });
+
+    peer.on('disconnected', () => {
+        updateStatus('Connection lost. Reconnecting...');
+        peer.reconnect();
+    });
+}
+
+async function requestMediaAccess() {
+    try {
+        const constraints = {
+            video: {
+                facingMode: 'user',
+                width: { ideal: 320 },
+                height: { ideal: 240 }
+            },
+            audio: true
+        };
+
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        myVideo.srcObject = localStream;
+        await myVideo.play();
+        hideModal(permissionModal);
+        updateStatus('Camera access granted');
+        return true;
+    } catch (err) {
+        console.error('Media error:', err);
+        const message = {
+            NotAllowedError: 'Please allow camera access',
+            NotFoundError: 'Camera not found',
+            NotReadableError: 'Camera is in use by another app'
+        }[err.name] || 'Camera access error';
+        
+        updateStatus(message);
+        alert(message);
+        return false;
+    }
+}
+
+function handleCall(call) {
+    call.on('stream', (remoteStream) => {
+        peerVideo.srcObject = remoteStream;
+        peerVideo.play().catch(err => console.error('Video play error:', err));
+        endCallBtn.style.display = 'inline-block';
+        updateStatus('Connected to peer');
+    });
+
+    call.on('close', () => {
+        endCall();
+    });
+
+    call.on('error', () => {
+        endCall();
+        updateStatus('Call error occurred');
+    });
+}
+
+function endCall() {
+    if (currentCall) {
+        currentCall.close();
+    }
+    if (peerVideo.srcObject) {
+        peerVideo.srcObject.getTracks().forEach(track => track.stop());
+    }
+    peerVideo.srcObject = null;
+    endCallBtn.style.display = 'none';
+    currentCall = null;
+    updateStatus('Call ended');
+}
+
+document.getElementById('allow-permission').addEventListener('click', async () => {
+    hideModal(permissionModal);
+    const success = await requestMediaAccess();
+    if (success) {
+        initializePeer();
+    }
+});
+
+document.getElementById('deny-permission').addEventListener('click', () => {
+    hideModal(permissionModal);
+    initializePeer();
+    updateStatus('Operating without camera');
+});
+
+callBtn.addEventListener('click', async () => {
+    const peerId = connectionIdInput.value.trim();
+    if (!peerId) {
+        alert("Enter peer ID to call");
+        return;
+    }
+
+    if (!localStream) {
+        const success = await requestMediaAccess();
+        if (!success) return;
+    }
+
+    updateStatus('Calling peer...');
+    const call = peer.call(peerId, localStream);
+    currentCall = call;
+    handleCall(call);
+});
+
+copyIdBtn.addEventListener('click', () => {
+    const peerId = peer.id;
+    navigator.clipboard.writeText(peerId)
+        .then(() => {
+            copyIdBtn.textContent = 'Copied!';
+            setTimeout(() => copyIdBtn.textContent = 'Copy ID', 2000);
+        })
+        .catch(err => console.error('Copy failed:', err));
+});
+
+endCallBtn.addEventListener('click', endCall);
+
+// Initialize
+if (navigator.permissions) {
+    navigator.permissions.query({ name: 'camera' })
+        .then(result => {
+            if (result.state === 'granted') {
+                requestMediaAccess().then(success => {
+                    if (success) initializePeer();
+                });
+            } else {
+                showModal(permissionModal);
+            }
+        })
+        .catch(() => {
+            showModal(permissionModal);
+        });
+} else {
+    showModal(permissionModal);
+}
+
+async function requestMediaAccess() {
+  try {
+      // First check if it's a mobile device
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      
+      let constraints = {
+          video: true,
+          audio: true
+      };
+
+      if (isMobile) {
+          constraints = {
+              video: {
+                  facingMode: 'user',
+                  width: { ideal: 320 },
+                  height: { ideal: 240 },
+                  frameRate: { max: 24 }
+              },
+              audio: {
+                  echoCancellation: true,
+                  noiseSuppression: true
+              }
+          };
+      }
+
+      // For iOS Safari, need to handle permissions differently
+      if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+          try {
+              // Try to access only audio first
+              await navigator.mediaDevices.getUserMedia({ audio: true });
+              // Then try video
+              await navigator.mediaDevices.getUserMedia({ video: true });
+          } catch (err) {
+              alert('Please enable camera/microphone access in your device settings');
+              return false;
+          }
+      }
+
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      myVideo.srcObject = localStream;
+      await myVideo.play();
+      return true;
+
+  } catch (err) {
+      console.error('Media access error:', err);
+      
+      if (/Android/i.test(navigator.userAgent)) {
+          alert('For Android: \n1. Tap the lock/info icon in address bar\n2. Tap Site Settings\n3. Allow Camera and Microphone');
+      } else if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+          alert('For iOS: \n1. Go to Settings\n2. Find Safari/Chrome\n3. Enable Camera and Microphone access');
+      }
+      return false;
+  }
+}
+  </script>
+</body>
+</html>
