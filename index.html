@@ -57,18 +57,25 @@
             height: auto;
             border-radius: 8px;
             overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
 
         .video-container {
-            position: absolute;
+            position: relative;
             width: 100%;
             height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
 
         .video-container video {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
+            transform: scaleX(-1);
         }
 
         .pip-video {
@@ -83,6 +90,10 @@
             z-index: 10;
             border: 2px solid white;
             transition: transform 0.3s;
+        }
+
+        .pip-video video {
+            transform: scaleX(-1);
         }
 
         .pip-video:hover {
@@ -132,6 +143,50 @@
         .video-grid:hover .controls,
         .video-grid.touch .controls {
             opacity: 1;
+        }
+
+        .call-type-selector {
+            margin: 10px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .call-type-button {
+            padding: 10px 20px;
+            border-radius: 20px;
+            border: none;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .call-type-button.active {
+            background: #45a049;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+
+        .speaker-control {
+            display: none;
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255,255,255,0.2);
+            padding: 10px;
+            border-radius: 20px;
+            z-index: 11;
+        }
+
+        .proximity-dark {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: black;
+            z-index: 1000;
+            display: none;
         }
 
         input {
@@ -202,6 +257,13 @@
                 height: 44px;
             }
         }
+
+        .canvas-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -211,6 +273,11 @@
         <div class="status-message" id="status-message">Initializing...</div>
         
         <div class="connection-section">
+            <div class="call-type-selector">
+                <button id="video-call-btn" class="call-type-button active">Video Call</button>
+                <button id="audio-call-btn" class="call-type-button">Audio Call</button>
+            </div>
+
             <div class="peer-id-display">
                 <span id="peer-id-text">Your Peer ID: Generating...</span>
                 <button id="copy-id" class="copy-button">Copy ID</button>
@@ -225,6 +292,7 @@
         <div class="video-grid">
             <div class="video-container">
                 <video id="main-video" autoplay playsinline></video>
+                <canvas id="face-canvas" class="canvas-overlay"></canvas>
             </div>
             <div class="pip-video">
                 <video id="pip-video" autoplay playsinline muted></video>
@@ -235,13 +303,18 @@
                 <button class="control-button end-call">📞</button>
                 <button class="control-button toggle-pip">⤢</button>
             </div>
+            <div class="speaker-control">
+                <button class="control-button toggle-speaker">🔊</button>
+            </div>
         </div>
     </div>
+
+    <div class="proximity-dark"></div>
 
     <div id="permission-modal" class="modal">
         <div style="font-size: 48px; margin-bottom: 15px;">📹</div>
         <div style="margin-bottom: 20px;">
-            This app needs access to your camera and microphone for video calls.
+            This app needs access to your camera and microphone for calls.
         </div>
         <button id="allow-permission" style="background-color: #4CAF50; margin-right: 10px;">Allow Access</button>
         <button id="deny-permission" style="background-color: #dc3545;">Deny</button>
@@ -249,7 +322,7 @@
 
     <div id="incoming-call-modal" class="modal">
         <h3>Incoming Call</h3>
-        <p>Someone is calling you...</p>
+        <p id="incoming-call-type">Video call incoming...</p>
         <button id="accept-call" style="background-color: #4CAF50;">Accept</button>
         <button id="reject-call" style="background-color: #dc3545;">Reject</button>
     </div>
@@ -257,6 +330,7 @@
     <div class="modal-backdrop"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
     <script>
         let peer;
         let localStream;
@@ -264,9 +338,14 @@
         let isLocalStreamMain = true;
         let isVideoEnabled = true;
         let isAudioEnabled = true;
+        let isAudioOnly = false;
+        let isSpeakerOn = false;
+        let isProximityActive = false;
+        let faceDetectionInterval;
 
         const mainVideo = document.getElementById('main-video');
         const pipVideo = document.getElementById('pip-video');
+        const faceCanvas = document.getElementById('face-canvas');
         const callBtn = document.getElementById('call-btn');
         const connectionIdInput = document.getElementById('connection-id');
         const peerIdText = document.getElementById('peer-id-text');
@@ -278,6 +357,53 @@
         const acceptCallBtn = document.getElementById('accept-call');
         const rejectCallBtn = document.getElementById('reject-call');
         const videoGrid = document.querySelector('.video-grid');
+        const proximityDark = document.querySelector('.proximity-dark');
+
+        async function loadFaceDetection() {
+            try {
+                await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+                await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+                startFaceDetection();
+            } catch (error) {
+                console.error('Face detection model loading error:', error);
+            }
+        }
+
+        function startFaceDetection() {
+            faceCanvas.width = mainVideo.videoWidth;
+            faceCanvas.height = mainVideo.videoHeight;
+            
+            if (faceDetectionInterval) clearInterval(faceDetectionInterval);
+
+            faceDetectionInterval = setInterval(async () => {
+                if (!isAudioOnly && localStream && mainVideo.videoWidth > 0) {
+                    const detections = await faceapi.detectAllFaces(
+                        mainVideo,
+                        new faceapi.TinyFaceDetectorOptions()
+                    ).withFaceLandmarks();
+
+                    const ctx = faceCanvas.getContext('2d');
+                    ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+
+                    if (detections.length > 0) {
+                        const detection = detections[0];
+                        const box = detection.detection.box;
+                        
+                        // Center the video on the face
+                        const scale = Math.min(
+                            mainVideo.videoWidth / (box.width * 1.5),
+                            mainVideo.videoHeight / (box.height * 1.5)
+                        );
+
+                        mainVideo.style.transform = `scale(${scale}) translateX(${
+                            (box.x + box.width/2 - mainVideo.videoWidth/2) * -1
+                        }px) translateY(${
+                            (box.y + box.height/2 - mainVideo.videoHeight/2) * -1
+                        }px) scaleX(-1)`;
+                    }
+                }
+            }, 100);
+        }
 
         function updateStatus(message) {
             statusMessage.textContent = message;
@@ -309,11 +435,71 @@
             }, 3000);
         }
 
+        async function setupMediaStream(audioOnly = false) {
+          const constraints = {
+              video: audioOnly ? false : {
+                  facingMode: { ideal: 'user' },
+                  width: { ideal: window.innerWidth },
+                  height: { ideal: window.innerHeight }
+              },
+              audio: {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true
+              }
+          };
+      
+          try {
+              localStream = await navigator.mediaDevices.getUserMedia(constraints);
+              
+              if (!audioOnly) {
+                  const videoTrack = localStream.getVideoTracks()[0];
+                  if (videoTrack.getCapabilities().facingMode) {
+                      await videoTrack.applyConstraints({
+                          advanced: [{ facingMode: 'user' }]
+                      });
+                  }
+              }
+      
+              mainVideo.srcObject = localStream;
+              await mainVideo.play();
+      
+              // Prevent echo by muting local audio output
+              mainVideo.volume = 0;
+              pipVideo.volume = 0;
+      
+              // Set up audio routing
+              if ('setSinkId' in mainVideo) {
+                  await Promise.all([
+                      mainVideo.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece'),
+                      pipVideo.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
+                  ]).catch(err => console.error('Audio routing error:', err));
+              }
+      
+              // Start face detection if video enabled
+              if (!audioOnly && faceapi.nets.tinyFaceDetector.isLoaded) {
+                  startFaceDetection();
+              }
+      
+              return true;
+          } catch (error) {
+              console.error('Media stream setup error:', error);
+              updateStatus('Failed to access media devices');
+              throw error;
+          }
+      }
+
         function initializePeer() {
             updateStatus('Initializing connection...');
             
             peer = new Peer({
-                debug: 2
+                debug: 2,
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ]
+                }
             });
 
             peer.on('open', (id) => {
@@ -322,24 +508,26 @@
                 updateStatus('Ready to connect');
             });
 
-            peer.on('connection', (conn) => {
-                conn.on('open', () => {
-                    updateStatus('Peer connected');
-                });
-            });
-
             peer.on('call', (call) => {
                 currentCall = call;
+                const callType = call.metadata?.isAudioOnly ? 'Audio' : 'Video';
+                document.getElementById('incoming-call-type').textContent = 
+                    `${callType} call incoming...`;
                 showModal(incomingCallModal);
 
                 acceptCallBtn.onclick = async () => {
                     hideModal(incomingCallModal);
-                    if (!localStream) {
-                        const success = await requestMediaAccess();
-                        if (!success) return;
+                    isAudioOnly = call.metadata?.isAudioOnly || false;
+                    updateUIForCallType(isAudioOnly);
+                    
+                    try {
+                        await setupMediaStream(isAudioOnly);
+                        call.answer(localStream);
+                        handleCall(call);
+                    } catch (error) {
+                        console.error('Call answer error:', error);
+                        updateStatus('Failed to answer call');
                     }
-                    call.answer(localStream);
-                    handleCall(call);
                 };
 
                 rejectCallBtn.onclick = () => {
@@ -348,69 +536,26 @@
                 };
             });
 
-            peer.on('error', (error) => {
-                console.error('Peer error:', error);
-                if (error.type === 'network') {
-                    updateStatus('Network error. Check your connection.');
-                    peer.reconnect();
-                } else if (error.type === 'peer-unavailable') {
-                    updateStatus('Peer not found. Check the ID.');
-                } else {
-                    updateStatus('Connection error. Retrying...');
-                    peer.reconnect();
-                }
-            });
-
-            peer.on('disconnected', () => {
-                updateStatus('Connection lost. Reconnecting...');
-                peer.reconnect();
-            });
+            peer.on('error', handlePeerError);
+            peer.on('disconnected', handlePeerDisconnect);
         }
 
-        async function requestMediaAccess() {
-            try {
-                const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-                
-                let constraints = {
-                    video: {
-                        facingMode: 'user',
-                        width: { ideal: isMobile ? 320 : 640 },
-                        height: { ideal: isMobile ? 240 : 480 },
-                        frameRate: { max: 24 }
-                    },
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    }
-                };
-
-                if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                    try {
-                        await navigator.mediaDevices.getUserMedia({ audio: true });
-                        await navigator.mediaDevices.getUserMedia({ video: true });
-                    } catch (err) {
-                        alert('Please enable camera/microphone access in your device settings');
-                        return false;
-                    }
-                }
-
-                localStream = await navigator.mediaDevices.getUserMedia(constraints);
-                mainVideo.srcObject = localStream;
-                await mainVideo.play();
-                hideModal(permissionModal);
-                updateStatus('Media access granted');
-                return true;
-
-            } catch (err) {
-                console.error('Media access error:', err);
-                
-                if (/Android/i.test(navigator.userAgent)) {
-                    alert('For Android: \n1. Tap the lock/info icon in address bar\n2. Tap Site Settings\n3. Allow Camera and Microphone');
-                } else if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                    alert('For iOS: \n1. Go to Settings\n2. Find Safari/Chrome\n3. Enable Camera and Microphone access');
-                }
-                return false;
+        function handlePeerError(error) {
+            console.error('Peer error:', error);
+            if (error.type === 'network') {
+                updateStatus('Network error. Check your connection.');
+                peer.reconnect();
+            } else if (error.type === 'peer-unavailable') {
+                updateStatus('Peer not found. Check the ID.');
+            } else {
+                updateStatus('Connection error. Retrying...');
+                peer.reconnect();
             }
+        }
+
+        function handlePeerDisconnect() {
+            updateStatus('Connection lost. Reconnecting...');
+            peer.reconnect();
         }
 
         function handleCall(call) {
@@ -422,6 +567,15 @@
                     mainVideo.srcObject = remoteStream;
                     pipVideo.srcObject = localStream;
                 }
+                
+                // Configure audio output
+                [mainVideo, pipVideo].forEach(video => {
+                    if ('setSinkId' in video) {
+                        video.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
+                            .catch(err => console.error('Audio output error:', err));
+                    }
+                });
+
                 updateStatus('Connected to peer');
             });
 
@@ -442,6 +596,15 @@
             updateStatus('Call ended');
         }
 
+        function updateUIForCallType(isAudioOnly) {
+            document.querySelector('.video-grid').style.display = 
+                isAudioOnly ? 'none' : 'flex';
+            document.querySelector('.speaker-control').style.display = 
+                isAudioOnly ? 'block' : 'none';
+            document.querySelector('.toggle-video').style.display = 
+                isAudioOnly ? 'none' : 'block';
+        }
+
         // Event Listeners
         document.querySelector('.pip-video').addEventListener('click', switchVideos);
         
@@ -457,11 +620,24 @@
             document.querySelector('.toggle-audio').textContent = isAudioEnabled ? '🎤' : '🔇';
         });
 
+        document.querySelector('.toggle-speaker').addEventListener('click', () => {
+            isSpeakerOn = !isSpeakerOn;
+            const audioElements = [mainVideo, pipVideo];
+            audioElements.forEach(el => {
+                if (el.srcObject && 'setSinkId' in el) {
+                    el.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
+                        .catch(err => console.error('Audio output error:', err));
+                }
+            });
+            document.querySelector('.toggle-speaker').textContent = 
+                isSpeakerOn ? '🔊' : '🎧';
+        });
+
         document.querySelector('.toggle-pip').addEventListener('click', async () => {
             try {
                 if (document.pictureInPictureElement) {
                     await document.exitPictureInPicture();
-                } else {
+                } else if (document.pictureInPictureEnabled) {
                     await mainVideo.requestPictureInPicture();
                 }
             } catch (err) {
@@ -470,9 +646,22 @@
         });
 
         document.querySelector('.end-call').addEventListener('click', endCall);
-
         videoGrid.addEventListener('touchstart', showControls);
         videoGrid.addEventListener('mousemove', showControls);
+
+        document.getElementById('video-call-btn').addEventListener('click', () => {
+            isAudioOnly = false;
+            updateUIForCallType(false);
+            document.getElementById('video-call-btn').classList.add('active');
+            document.getElementById('audio-call-btn').classList.remove('active');
+        });
+
+        document.getElementById('audio-call-btn').addEventListener('click', () => {
+            isAudioOnly = true;
+            updateUIForCallType(true);
+            document.getElementById('audio-call-btn').classList.add('active');
+            document.getElementById('video-call-btn').classList.remove('active');
+        });
         
         callBtn.addEventListener('click', async () => {
             const peerId = connectionIdInput.value.trim();
@@ -481,13 +670,11 @@
                 return;
             }
         
-            if (!localStream) {
-                const success = await requestMediaAccess();
-                if (!success) return;
-            }
-        
             try {
-                const call = peer.call(peerId, localStream);
+                await setupMediaStream(isAudioOnly);
+                const call = peer.call(peerId, localStream, {
+                    metadata: { isAudioOnly }
+                });
                 currentCall = call;
                 handleCall(call);
                 updateStatus('Calling peer...');
@@ -508,46 +695,59 @@
                 })
                 .catch(err => console.error('Copy failed:', err));
         });
-        
-        document.getElementById('allow-permission').addEventListener('click', async () => {
-            const success = await requestMediaAccess();
-            if (!success) {
-                alert('Failed to access camera/microphone. Please check your settings.');
-            }
-        });
-        
-        document.getElementById('deny-permission').addEventListener('click', () => {
-            hideModal(permissionModal);
-            updateStatus('Media access denied');
-        });
-        
-        // Handle page visibility changes
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden && document.pictureInPictureElement) {
-                mainVideo.play();
-            }
-        });
+
+        // Proximity sensor handling
+        if ('AmbientLightSensor' in window) {
+            const sensor = new AmbientLightSensor();
+            sensor.addEventListener('reading', () => {
+                if (isAudioOnly && !isSpeakerOn) {
+                    isProximityActive = sensor.illuminance < 10;
+                    proximityDark.style.display = isProximityActive ? 'block' : 'none';
+                }
+            });
+            sensor.start();
+        } else if ('DeviceLightEvent' in window) {
+            window.addEventListener('devicelight', (event) => {
+                if (isAudioOnly && !isSpeakerOn) {
+                    isProximityActive = event.value < 10;
+                    proximityDark.style.display = isProximityActive ? 'block' : 'none';
+                }
+            });
+        }
         
         // Initialize
         window.addEventListener('load', () => {
             if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
                 showModal(permissionModal);
                 initializePeer();
+                if (!isAudioOnly) {
+                    loadFaceDetection();
+                }
             } else {
                 updateStatus('Your browser does not support video calls');
             }
         });
         
-        // Handle beforeunload
+        // Handle window events
         window.addEventListener('beforeunload', () => {
-            if (currentCall) {
-                currentCall.close();
-            }
+            if (currentCall) currentCall.close();
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
             }
+            if (faceDetectionInterval) {
+                clearInterval(faceDetectionInterval);
+            }
         });
-      
-      </script>
+
+        window.addEventListener('resize', () => {
+            if (localStream && !isAudioOnly) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                videoTrack.applyConstraints({
+                    width: { ideal: window.innerWidth },
+                    height: { ideal: window.innerHeight }
+                }).catch(err => console.error('Resize error:', err));
+            }
+        });
+    </script>
 </body>
 </html>
