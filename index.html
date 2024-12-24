@@ -126,6 +126,7 @@
             align-items: center;
             justify-content: center;
             font-size: 20px;
+            z-index: 855;
         }
 
         .control-button.end-call {
@@ -247,6 +248,10 @@
                 width: 80px;
                 height: 120px;
             }
+            .video-grid {
+                aspect-ratio: 9/16;
+            }
+            
 
             .controls {
                 padding: 30px 20px;
@@ -256,6 +261,21 @@
                 width: 44px;
                 height: 44px;
             }
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 20%;
+                z-index: 1000;
+                justify-content: center;
+                margin-left: 50%;
+                margin-top: 50%;
+            }
+            .control-button{
+                z-index: 999;
+            }
         }
 
         .canvas-overlay {
@@ -264,7 +284,7 @@
             left: 0;
             pointer-events: none;
         }
-
+        
 
         .modal {
           display: none;
@@ -272,15 +292,17 @@
           top: 0;
           left: 0;
           width: 100%;
-          height: 100%;
-          background: rgba(0, 0, 0, 0.5);
+          height: 20%;
           z-index: 1000;
+          justify-content: center;
+          margin-left: 50%;
+          margin-top: 15%;
       }
       
       .modal-content {
           position: fixed;
           top: 50%;
-          left: 50%;
+          left: 0%;
           transform: translate(-50%, -50%);
           background: white;
           padding: 20px;
@@ -288,6 +310,8 @@
           max-width: 400px;
           width: 90%;
           text-align: center;
+          align-content: center;
+          overflow: auto;
       }
       
       .permission-buttons {
@@ -360,470 +384,460 @@
     </div>
 
     <div class="modal-backdrop"></div>
+    <video id="pipVideo" autoplay playsinline></video>
+
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
     <script>
-        let peer;
-        let localStream;
-        let currentCall;
-        let isLocalStreamMain = true;
-        let isVideoEnabled = true;
-        let isAudioEnabled = true;
-        let isAudioOnly = false;
-        let isSpeakerOn = false;
-        let isProximityActive = false;
-        let faceDetectionInterval;
+        // Global variables
+let peer;
+let localStream;
+let currentCall;
+let remoteStream;
+let isLocalStreamMain = true;
+let isVideoEnabled = true;
+let isAudioEnabled = true;
+let isAudioOnly = false;
+let isSpeakerOn = false;
+let currentCameraFacing = 'user';
+let faceDetectionInterval;
 
-        const mainVideo = document.getElementById('main-video');
-        const pipVideo = document.getElementById('pip-video');
-        const faceCanvas = document.getElementById('face-canvas');
-        const callBtn = document.getElementById('call-btn');
-        const connectionIdInput = document.getElementById('connection-id');
-        const peerIdText = document.getElementById('peer-id-text');
-        const copyIdBtn = document.getElementById('copy-id');
-        const statusMessage = document.getElementById('status-message');
-        const permissionModal = document.getElementById('permission-modal');
-        const incomingCallModal = document.getElementById('incoming-call-modal');
-        const modalBackdrop = document.querySelector('.modal-backdrop');
-        const acceptCallBtn = document.getElementById('accept-call');
-        const rejectCallBtn = document.getElementById('reject-call');
-        const videoGrid = document.querySelector('.video-grid');
-        const proximityDark = document.querySelector('.proximity-dark');
+// DOM Elements
+const mainVideo = document.getElementById('main-video');
+const pipVideo = document.getElementById('pip-video');
+const faceCanvas = document.getElementById('face-canvas');
+const callBtn = document.getElementById('call-btn');
+const connectionIdInput = document.getElementById('connection-id');
+const peerIdText = document.getElementById('peer-id-text');
+const copyIdBtn = document.getElementById('copy-id');
+const statusMessage = document.getElementById('status-message');
+const permissionModal = document.getElementById('permission-modal');
+const incomingCallModal = document.getElementById('incoming-call-modal');
+const modalBackdrop = document.querySelector('.modal-backdrop');
+const acceptCallBtn = document.getElementById('accept-call');
+const rejectCallBtn = document.getElementById('reject-call');
+const videoGrid = document.querySelector('.video-grid');
 
-        async function loadFaceDetection() {
-            try {
-                await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-                await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-                startFaceDetection();
-            } catch (error) {
-                console.error('Face detection model loading error:', error);
-            }
-        }
 
-        function startFaceDetection() {
-            faceCanvas.width = mainVideo.videoWidth;
-            faceCanvas.height = mainVideo.videoHeight;
-            
-            if (faceDetectionInterval) clearInterval(faceDetectionInterval);
 
-            faceDetectionInterval = setInterval(async () => {
-                if (!isAudioOnly && localStream && mainVideo.videoWidth > 0) {
-                    const detections = await faceapi.detectAllFaces(
-                        mainVideo,
-                        new faceapi.TinyFaceDetectorOptions()
-                    ).withFaceLandmarks();
-
-                    const ctx = faceCanvas.getContext('2d');
-                    ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
-
-                    if (detections.length > 0) {
-                        const detection = detections[0];
-                        const box = detection.detection.box;
-                        
-                        // Center the video on the face
-                        const scale = Math.min(
-                            mainVideo.videoWidth / (box.width * 1.5),
-                            mainVideo.videoHeight / (box.height * 1.5)
-                        );
-
-                        mainVideo.style.transform = `scale(${scale}) translateX(${
-                            (box.x + box.width/2 - mainVideo.videoWidth/2) * -1
-                        }px) translateY(${
-                            (box.y + box.height/2 - mainVideo.videoHeight/2) * -1
-                        }px) scaleX(-1)`;
-                    }
+// Initialize PeerJS connection
+function initializePeer() {
+    updateStatus('Initializing connection...');
+    
+    peer = new Peer({
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                {
+                    urls: 'turn:numb.viagenie.ca',
+                    credential: 'muazkh',
+                    username: 'webrtc@live.com'
                 }
-            }, 100);
+            ]
         }
+    });
 
-        function updateStatus(message) {
-            statusMessage.textContent = message;
-        }
+    peer.on('open', id => {
+        peerIdText.textContent = `Your Peer ID: ${id}`;
+        updateStatus('Ready');
+    });
 
-        function showModal(modalElement) {
-            modalElement.style.display = 'block';
-            modalBackdrop.style.display = 'block';
-        }
-
-        function hideModal(modalElement) {
-            modalElement.style.display = 'none';
-            modalBackdrop.style.display = 'none';
-        }
-
-        function switchVideos() {
-            const temp = mainVideo.srcObject;
-            mainVideo.srcObject = pipVideo.srcObject;
-            pipVideo.srcObject = temp;
-            isLocalStreamMain = !isLocalStreamMain;
-        }
-
-        let controlsTimeout;
-        function showControls() {
-            videoGrid.classList.add('touch');
-            clearTimeout(controlsTimeout);
-            controlsTimeout = setTimeout(() => {
-                videoGrid.classList.remove('touch');
-            }, 3000);
-        }
-
-        async function setupMediaStream(audioOnly = false) {
-          const constraints = {
-              video: audioOnly ? false : {
-                  facingMode: { ideal: 'user' },
-                  width: { ideal: window.innerWidth },
-                  height: { ideal: window.innerHeight }
-              },
-              audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true
-              }
-          };
-      
-          try {
-              localStream = await navigator.mediaDevices.getUserMedia(constraints);
-              
-              if (!audioOnly) {
-                  const videoTrack = localStream.getVideoTracks()[0];
-                  if (videoTrack.getCapabilities().facingMode) {
-                      await videoTrack.applyConstraints({
-                          advanced: [{ facingMode: 'user' }]
-                      });
-                  }
-              }
-      
-              mainVideo.srcObject = localStream;
-              await mainVideo.play();
-      
-              // Prevent echo by muting local audio output
-              mainVideo.volume = 0;
-              pipVideo.volume = 0;
-      
-              // Set up audio routing
-              if ('setSinkId' in mainVideo) {
-                  await Promise.all([
-                      mainVideo.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece'),
-                      pipVideo.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
-                  ]).catch(err => console.error('Audio routing error:', err));
-              }
-      
-              // Start face detection if video enabled
-              if (!audioOnly && faceapi.nets.tinyFaceDetector.isLoaded) {
-                  startFaceDetection();
-              }
-      
-              return true;
-          } catch (error) {
-              console.error('Media stream setup error:', error);
-              updateStatus('Failed to access media devices');
-              throw error;
-          }
-      }
-
-      async function checkMediaPermissions() {
-        try {
-            const result = await navigator.permissions.query({ name: 'camera' });
-            const micResult = await navigator.permissions.query({ name: 'microphone' });
-            
-            if (result.state === 'granted' && micResult.state === 'granted') {
-                return true;
-            } else {
-                showPermissionModal();
-                return false;
-            }
-        } catch (error) {
-            console.error('Permission check failed:', error);
-            showPermissionModal();
-            return false;
-        }
-    }
-    
-    function showPermissionModal() {
-        const modal = document.getElementById('permission-modal');
-        modal.style.display = 'block';
-    
-        document.getElementById('allow-permission').onclick = async () => {
+    // Updated incoming call handling
+    peer.on('call', async (call) => {
+        console.log('Incoming call detected');
+        updateStatus('Incoming call...');
+        
+        // Show incoming call modal
+        document.getElementById('incoming-call-modal').style.display = 'block';
+        document.querySelector('.modal-backdrop').style.display = 'block';
+        
+        // Update call type text
+        document.getElementById('incoming-call-type').textContent = 
+            call.metadata?.isAudioOnly ? 'Audio call incoming...' : 'Video call incoming...';
+        
+        // Handle accept call
+        document.getElementById('accept-call').onclick = async () => {
             try {
-                await setupMediaStream(isAudioOnly);
-                modal.style.display = 'none';
-                updateStatus('Media access granted');
-            } catch (error) {
-                document.getElementById('permission-message').textContent = 
-                    'Failed to access devices. Please check browser settings.';
-            }
-        };
-    
-        document.getElementById('deny-permission').onclick = () => {
-            modal.style.display = 'none';
-            updateStatus('Media access denied');
-        };
-    }
-    
-    // Call this before setupMediaStream
-    if (!(await checkMediaPermissions())) {
-        return;
-    }
-
-        function initializePeer() {
-            updateStatus('Initializing connection...');
-            
-            peer = new Peer({
-                debug: 2,
-                config: {
-                    'iceServers': [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
-                    ]
-                }
-            });
-
-            peer.on('open', (id) => {
-                console.log('My peer ID is: ' + id);
-                peerIdText.textContent = `Your Peer ID: ${id}`;
-                updateStatus('Ready to connect');
-            });
-
-            peer.on('call', (call) => {
-                currentCall = call;
-                const callType = call.metadata?.isAudioOnly ? 'Audio' : 'Video';
-                document.getElementById('incoming-call-type').textContent = 
-                    `${callType} call incoming...`;
-                showModal(incomingCallModal);
-
-                acceptCallBtn.onclick = async () => {
-                    hideModal(incomingCallModal);
-                    isAudioOnly = call.metadata?.isAudioOnly || false;
-                    updateUIForCallType(isAudioOnly);
-                    
-                    try {
-                        await setupMediaStream(isAudioOnly);
-                        call.answer(localStream);
-                        handleCall(call);
-                    } catch (error) {
-                        console.error('Call answer error:', error);
-                        updateStatus('Failed to answer call');
-                    }
-                };
-
-                rejectCallBtn.onclick = () => {
-                    hideModal(incomingCallModal);
-                    call.close();
-                };
-            });
-
-            peer.on('error', handlePeerError);
-            peer.on('disconnected', handlePeerDisconnect);
-        }
-
-        function handlePeerError(error) {
-            console.error('Peer error:', error);
-            if (error.type === 'network') {
-                updateStatus('Network error. Check your connection.');
-                peer.reconnect();
-            } else if (error.type === 'peer-unavailable') {
-                updateStatus('Peer not found. Check the ID.');
-            } else {
-                updateStatus('Connection error. Retrying...');
-                peer.reconnect();
-            }
-        }
-
-        function handlePeerDisconnect() {
-            updateStatus('Connection lost. Reconnecting...');
-            peer.reconnect();
-        }
-
-        function handleCall(call) {
-            call.on('stream', (remoteStream) => {
-                if (isLocalStreamMain) {
-                    pipVideo.srcObject = remoteStream;
-                    mainVideo.srcObject = localStream;
-                } else {
-                    mainVideo.srcObject = remoteStream;
-                    pipVideo.srcObject = localStream;
+                hideModal(document.getElementById('incoming-call-modal'));
+                
+                if (!localStream) {
+                    const success = await setupMediaStream();
+                    if (!success) throw new Error('Failed to setup media stream');
                 }
                 
-                // Configure audio output
-                [mainVideo, pipVideo].forEach(video => {
-                    if ('setSinkId' in video) {
-                        video.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
-                            .catch(err => console.error('Audio output error:', err));
-                    }
-                });
+                call.answer(localStream);
+                currentCall = call;
+                handleCall(call);
+                updateStatus('Call connected');
+            } catch (error) {
+                console.error('Error accepting call:', error);
+                updateStatus('Failed to accept call');
+            }
+        };
 
-                updateStatus('Connected to peer');
+        // Handle reject call
+        document.getElementById('reject-call').onclick = () => {
+            hideModal(document.getElementById('incoming-call-modal'));
+            call.close();
+            updateStatus('Call rejected');
+        };
+    });
+
+    peer.on('error', handlePeerError);
+    peer.on('disconnected', handlePeerDisconnect);
+}
+// Update setupMediaStream to ensure proper constraints
+async function setupMediaStream() {
+    try {
+        // Check if we already have permission
+        const permissions = await navigator.mediaDevices.enumerateDevices();
+        const hasVideoPermission = permissions.some(device => device.kind === 'videoinput' && device.label !== '');
+        const hasAudioPermission = permissions.some(device => device.kind === 'audioinput' && device.label !== '');
+
+        if (!hasVideoPermission || !hasAudioPermission) {
+            // Show permission modal
+            showModal(permissionModal);
+            
+            // Wait for user to click Allow or Deny
+            await new Promise((resolve, reject) => {
+                document.getElementById('allow-permission').onclick = resolve;
+                document.getElementById('deny-permission').onclick = () => reject(new Error('Permission denied by user'));
             });
-
-            call.on('close', endCall);
-            call.on('error', endCall);
+            
+            hideModal(permissionModal);
         }
 
-        function endCall() {
+        // Request media with fallback options
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+        } catch (err) {
+            // If full media fails, try audio only
+            if (isAudioOnly) {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: false,
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+            } else {
+                throw err;
+            }
+        }
+
+        // Set up local preview
+        if (localStream) {
+            pipVideo.srcObject = localStream;
+            pipVideo.muted = true;
+            await pipVideo.play().catch(console.error);
+            updateStatus('Media ready');
+            return true;
+        }
+        return false;
+
+    } catch (error) {
+        console.error('Media setup error:', error);
+        
+        let errorMessage = 'Failed to access media devices';
+        if (error.name === 'NotAllowedError') {
+            errorMessage = 'Camera/Microphone permission denied';
+        } else if (error.name === 'NotFoundError') {
+            errorMessage = 'No camera/microphone found';
+        } else if (error.name === 'NotReadableError') {
+            errorMessage = 'Camera/Microphone is already in use';
+        }
+        
+        updateStatus(errorMessage);
+        return false;
+    }
+}
+
+
+
+async function checkMediaPermissions() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasPermissions = devices.some(device => device.label !== '');
+        return hasPermissions;
+    } catch (error) {
+        console.error('Permission check error:', error);
+        return false;
+    }
+}
+// Handle incoming calls
+async function handleIncomingCall(call) {
+    currentCall = call;
+    showModal(incomingCallModal);
+
+    acceptCallBtn.onclick = async () => {
+        hideModal(incomingCallModal);
+        isAudioOnly = call.metadata?.isAudioOnly || false;
+        updateUIForCallType(isAudioOnly);
+        
+        try {
+            if (!localStream) {
+                await setupMediaStream(isAudioOnly);
+            }
+            call.answer(localStream);
+            handleCall(call);
+        } catch (error) {
+            console.error('Error answering call:', error);
+            updateStatus('Failed to answer call');
+        }
+    };
+
+    rejectCallBtn.onclick = () => {
+        hideModal(incomingCallModal);
+        call.close();
+    };
+}
+
+ // Update makeCall function to ensure streams are properly set up
+ async function makeCall(peerId) {
+    updateStatus('Setting up media...');
+    
+    try {
+        if (!localStream) {
+            const success = await setupMediaStream();
+            if (!success) {
+                throw new Error('Failed to setup media devices. Please check permissions and try again.');
+            }
+        }
+
+        if (!localStream.getTracks().length) {
+            throw new Error('No media tracks available');
+        }
+
+        const callOptions = {
+            metadata: {
+                isAudioOnly: isAudioOnly
+            }
+        };
+
+        updateStatus('Initiating call...');
+        const call = peer.call(peerId, localStream, callOptions);
+        
+        if (!call) {
+            throw new Error('Failed to create call object');
+        }
+
+        currentCall = call;
+        handleCall(call);
+        updateStatus('Calling...');
+
+    } catch (error) {
+        console.error('Call error:', error);
+        updateStatus(error.message || 'Call failed');
+        
+        // Clean up if needed
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+    }
+}
+//handle call from server
+async function handleCall(call) {
+    call.on('stream', async (stream) => {
+        console.log('Received remote stream');
+        remoteStream = stream;
+        
+        try {
+            if (mainVideo.srcObject !== stream) {
+                mainVideo.srcObject = stream;
+                mainVideo.muted = false;
+                mainVideo.volume = 1;
+                
+                // Wait for loadedmetadata before playing
+                await new Promise((resolve) => {
+                    mainVideo.onloadedmetadata = resolve;
+                });
+                
+                await mainVideo.play();
+            }
+
+            // Ensure audio is enabled
+            stream.getAudioTracks().forEach(track => {
+                track.enabled = true;
+            });
+
+            updateStatus('Connected');
+        } catch (error) {
+            console.error('Stream error:', error);
+            updateStatus('Stream connection failed');
+        }
+    });
+
+    call.on('close', cleanup);
+    call.on('error', cleanup);
+}
+
+function cleanup() {
+    if (remoteStream) {
+        remoteStream.getTracks().forEach(track => track.stop());
+    }
+    if (mainVideo.srcObject) {
+        mainVideo.srcObject = null;
+    }
+    currentCall = null;
+    updateStatus('Call ended');
+}
+
+// Switch camera function
+async function switchCamera() {
+    currentCameraFacing = currentCameraFacing === 'user' ? 'environment' : 'user';
+    try {
+        await setupMediaStream(isAudioOnly);
+        if (currentCall) {
+            const videoTrack = localStream.getVideoTracks()[0];
+            const sender = currentCall.peerConnection.getSenders()
+                .find(s => s.track.kind === 'video');
+            if (sender) {
+                sender.replaceTrack(videoTrack);
+            }
+        }
+    } catch (error) {
+        console.error('Error switching camera:', error);
+        updateStatus('Failed to switch camera');
+    }
+}
+
+// Utility functions
+function updateStatus(message) {
+    statusMessage.textContent = message;
+}
+
+function showModal(modalElement) {
+    modalElement.style.display = 'block';
+    document.querySelector('.modal-backdrop').style.display = 'block';
+}
+
+function hideModal(modalElement) {
+    modalElement.style.display = 'none';
+    document.querySelector('.modal-backdrop').style.display = 'none';
+}
+
+function switchVideos() {
+    const temp = mainVideo.srcObject;
+    mainVideo.srcObject = pipVideo.srcObject;
+    pipVideo.srcObject = temp;
+    isLocalStreamMain = !isLocalStreamMain;
+}
+
+function endCall() {
+    if (currentCall) {
+        currentCall.close();
+    }
+    if (document.pictureInPictureElement) {
+        document.exitPictureInPicture();
+    }
+    pipVideo.srcObject = localStream;
+    mainVideo.srcObject = null;
+    currentCall = null;
+    updateStatus('Call ended');
+}
+
+function updateUIForCallType(isAudioOnly) {
+    videoGrid.style.display = isAudioOnly ? 'none' : 'flex';
+    document.querySelector('.speaker-control').style.display = isAudioOnly ? 'block' : 'none';
+    document.querySelector('.toggle-video').style.display = isAudioOnly ? 'none' : 'block';
+}
+
+// Error handlers
+function handlePeerError(error) {
+    console.error('Peer error:', error);
+    if (error.type === 'network') {
+        updateStatus('Network error. Check your connection.');
+        peer.reconnect();
+    } else if (error.type === 'peer-unavailable') {
+        updateStatus('Peer not found. Check the ID.');
+    } else {
+        updateStatus('Connection error. Retrying...');
+        peer.reconnect();
+    }
+}
+
+function handlePeerDisconnect() {
+    updateStatus('Connection lost. Reconnecting...');
+    peer.reconnect();
+}
+
+// Event Listeners
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize PeerJS
+    initializePeer();
+
+    // Call button
+    callBtn.addEventListener('click', () => {
+        const peerId = connectionIdInput.value.trim();
+        if (peerId) {
+            makeCall(peerId);
+        } else {
+            updateStatus('Please enter a peer ID');
+        }
+    });
+    window.addEventListener('click', (event) => {
+        if (event.target === document.querySelector('.modal-backdrop')) {
+            hideModal(document.getElementById('incoming-call-modal'));
             if (currentCall) {
                 currentCall.close();
             }
-            if (document.pictureInPictureElement) {
-                document.exitPictureInPicture();
-            }
-            mainVideo.srcObject = localStream;
-            pipVideo.srcObject = null;
-            currentCall = null;
-            updateStatus('Call ended');
+            updateStatus('Call cancelled');
         }
+    });
 
-        function updateUIForCallType(isAudioOnly) {
-            document.querySelector('.video-grid').style.display = 
-                isAudioOnly ? 'none' : 'flex';
-            document.querySelector('.speaker-control').style.display = 
-                isAudioOnly ? 'block' : 'none';
-            document.querySelector('.toggle-video').style.display = 
-                isAudioOnly ? 'none' : 'block';
-        }
+    // Video controls
+    document.querySelector('.pip-video').addEventListener('click', switchVideos);
+    
+    document.querySelector('.toggle-video').addEventListener('click', () => {
+        isVideoEnabled = !isVideoEnabled;
+        localStream.getVideoTracks().forEach(track => track.enabled = isVideoEnabled);
+        document.querySelector('.toggle-video').textContent = isVideoEnabled ? '📹' : '📺';
+    });
 
-        // Event Listeners
-        document.querySelector('.pip-video').addEventListener('click', switchVideos);
-        
-        document.querySelector('.toggle-video').addEventListener('click', () => {
-            isVideoEnabled = !isVideoEnabled;
-            localStream.getVideoTracks().forEach(track => track.enabled = isVideoEnabled);
-            document.querySelector('.toggle-video').textContent = isVideoEnabled ? '📹' : '🚫';
-        });
+    document.querySelector('.toggle-audio').addEventListener('click', () => {
+        isAudioEnabled = !isAudioEnabled;
+        localStream.getAudioTracks().forEach(track => track.enabled = isAudioEnabled);
+        document.querySelector('.toggle-audio').textContent = isAudioEnabled ? '🎤' : '🔇';
+    });
 
-        document.querySelector('.toggle-audio').addEventListener('click', () => {
-            isAudioEnabled = !isAudioEnabled;
-            localStream.getAudioTracks().forEach(track => track.enabled = isAudioEnabled);
-            document.querySelector('.toggle-audio').textContent = isAudioEnabled ? '🎤' : '🔇';
-        });
+    document.querySelector('.end-call').addEventListener('click', endCall);
 
-        document.querySelector('.toggle-speaker').addEventListener('click', () => {
-            isSpeakerOn = !isSpeakerOn;
-            const audioElements = [mainVideo, pipVideo];
-            audioElements.forEach(el => {
-                if (el.srcObject && 'setSinkId' in el) {
-                    el.setSinkId(isSpeakerOn ? 'speaker' : 'earpiece')
-                        .catch(err => console.error('Audio output error:', err));
-                }
-            });
-            document.querySelector('.toggle-speaker').textContent = 
-                isSpeakerOn ? '🔊' : '🎧';
-        });
+    // Camera switch button
+    const cameraSwitchButton = document.createElement('button');
+        cameraSwitchButton.className = 'control-button switch-camera';
+        cameraSwitchButton.innerHTML = '🔄';
+        document.querySelector('.controls').appendChild(cameraSwitchButton);
+        cameraSwitchButton.addEventListener('click', switchCamera);
+    });
+    // Copy ID button
+    copyIdBtn.addEventListener('click', () => {
+        const peerId = peerIdText.textContent.split(': ')[1];
+        navigator.clipboard.writeText(peerId);
+        updateStatus('Peer ID copied to clipboard');
+    });
 
-        document.querySelector('.toggle-pip').addEventListener('click', async () => {
-            try {
-                if (document.pictureInPictureElement) {
-                    await document.exitPictureInPicture();
-                } else if (document.pictureInPictureEnabled) {
-                    await mainVideo.requestPictureInPicture();
-                }
-            } catch (err) {
-                console.error('PiP failed:', err);
-            }
+    // Call type selector
+    document.querySelectorAll('.call-type-selector button').forEach(button => {
+        button.addEventListener('click', (event) => {
+            document.querySelector('.call-type-selector button.active').classList.remove('active');
+            event.target.classList.add('active');
+            isAudioOnly = event.target.textContent === 'Audio Call';
+            updateUIForCallType(isAudioOnly);
         });
+    });
 
-        document.querySelector('.end-call').addEventListener('click', endCall);
-        videoGrid.addEventListener('touchstart', showControls);
-        videoGrid.addEventListener('mousemove', showControls);
-
-        document.getElementById('video-call-btn').addEventListener('click', () => {
-            isAudioOnly = false;
-            updateUIForCallType(false);
-            document.getElementById('video-call-btn').classList.add('active');
-            document.getElementById('audio-call-btn').classList.remove('active');
-        });
-
-        document.getElementById('audio-call-btn').addEventListener('click', () => {
-            isAudioOnly = true;
-            updateUIForCallType(true);
-            document.getElementById('audio-call-btn').classList.add('active');
-            document.getElementById('video-call-btn').classList.remove('active');
-        });
-        
-        callBtn.addEventListener('click', async () => {
-            const peerId = connectionIdInput.value.trim();
-            if (!peerId) {
-                updateStatus('Please enter peer ID');
-                return;
-            }
-        
-            try {
-                await setupMediaStream(isAudioOnly);
-                const call = peer.call(peerId, localStream, {
-                    metadata: { isAudioOnly }
-                });
-                currentCall = call;
-                handleCall(call);
-                updateStatus('Calling peer...');
-            } catch (err) {
-                console.error('Call error:', err);
-                updateStatus('Call failed. Please try again.');
-            }
-        });
-        
-        copyIdBtn.addEventListener('click', () => {
-            const peerId = peerIdText.textContent.split(': ')[1];
-            navigator.clipboard.writeText(peerId)
-                .then(() => {
-                    copyIdBtn.textContent = 'Copied!';
-                    setTimeout(() => {
-                        copyIdBtn.textContent = 'Copy ID';
-                    }, 2000);
-                })
-                .catch(err => console.error('Copy failed:', err));
-        });
-
-        // Proximity sensor handling
-        if ('AmbientLightSensor' in window) {
-            const sensor = new AmbientLightSensor();
-            sensor.addEventListener('reading', () => {
-                if (isAudioOnly && !isSpeakerOn) {
-                    isProximityActive = sensor.illuminance < 10;
-                    proximityDark.style.display = isProximityActive ? 'block' : 'none';
-                }
-            });
-            sensor.start();
-        } else if ('DeviceLightEvent' in window) {
-            window.addEventListener('devicelight', (event) => {
-                if (isAudioOnly && !isSpeakerOn) {
-                    isProximityActive = event.value < 10;
-                    proximityDark.style.display = isProximityActive ? 'block' : 'none';
-                }
-            });
-        }
-        
-        // Initialize
-        window.addEventListener('load', () => {
-            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                showModal(permissionModal);
-                initializePeer();
-                if (!isAudioOnly) {
-                    loadFaceDetection();
-                }
-            } else {
-                updateStatus('Your browser does not support video calls');
-            }
-        });
-        
-        // Handle window events
-        window.addEventListener('beforeunload', () => {
-            if (currentCall) currentCall.close();
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-            }
-            if (faceDetectionInterval) {
-                clearInterval(faceDetectionInterval);
-            }
-        });
-
-        window.addEventListener('resize', () => {
-            if (localStream && !isAudioOnly) {
-                const videoTrack = localStream.getVideoTracks()[0];
-                videoTrack.applyConstraints({
-                    width: { ideal: window.innerWidth },
-                    height: { ideal: window.innerHeight }
-                }).catch(err => console.error('Resize error:', err));
-            }
-        });
     </script>
-</body>
-</html>
+    
+    </body>
+    </html>
