@@ -50,50 +50,41 @@
 
         .video-grid {
             position: relative;
-            aspect-ratio: 16/9;
-            background: black;
             width: 100%;
-            max-width: 100vw;
-            height: auto;
-            border-radius: 8px;
+            height: 100vh; /* Full viewport height */
+            background: black;
             overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
         }
 
         .video-container {
             position: relative;
             width: 100%;
             height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
         }
 
         .video-container video {
             width: 100%;
             height: 100%;
-            object-fit: contain;
-            transform: scaleX(-1);
+            object-fit: cover; /* Changed to cover for better mobile fit */
         }
 
         .pip-video {
             position: absolute;
-            width: 120px;
-            height: 160px;
-            right: 20px;
-            top: 20px;
-            border-radius: 12px;
+            width: 80px;
+            height: 120px;
+            right: 10px;
+            top: 10px;
+            border-radius: 8px;
             overflow: hidden;
-            cursor: pointer;
             z-index: 10;
             border: 2px solid white;
-            transition: transform 0.3s;
+            background: black;
         }
 
         .pip-video video {
-            transform: scaleX(-1);
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .pip-video:hover {
@@ -113,6 +104,11 @@
             opacity: 0;
             transition: opacity 0.3s;
         }
+        .controls.visible {
+            opacity: 1;
+        }
+
+
 
         .control-button {
             width: 50px;
@@ -682,6 +678,18 @@ async function handleCall(call) {
     call.on('error', cleanup);
 }
 
+
+async function lockScreenOrientation() {
+    try {
+        if (screen.orientation && screen.orientation.lock) {
+            await screen.orientation.lock('portrait');
+        }
+    } catch (error) {
+        console.log('Screen orientation lock failed:', error);
+    }
+}
+
+
 function cleanup() {
     if (remoteStream) {
         remoteStream.getTracks().forEach(track => track.stop());
@@ -695,22 +703,59 @@ function cleanup() {
 
 // Switch camera function
 async function switchCamera() {
-    currentCameraFacing = currentCameraFacing === 'user' ? 'environment' : 'user';
     try {
-        await setupMediaStream(isAudioOnly);
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        
+        if (videoDevices.length < 2) {
+            updateStatus('No additional cameras found');
+            return;
+        }
+
+        currentCameraFacing = currentCameraFacing === 'user' ? 'environment' : 'user';
+        
+        const newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: currentCameraFacing },
+            audio: localStream.getAudioTracks().length > 0
+        });
+
+        // Replace tracks in local stream
+        const [videoTrack] = newStream.getVideoTracks();
+        const [oldVideoTrack] = localStream.getVideoTracks();
+        localStream.removeTrack(oldVideoTrack);
+        localStream.addTrack(videoTrack);
+
+        // Update PiP video
+        pipVideo.srcObject = localStream;
+
+        // Update remote stream if in call
         if (currentCall) {
-            const videoTrack = localStream.getVideoTracks()[0];
             const sender = currentCall.peerConnection.getSenders()
                 .find(s => s.track.kind === 'video');
             if (sender) {
-                sender.replaceTrack(videoTrack);
+                await sender.replaceTrack(videoTrack);
             }
         }
     } catch (error) {
-        console.error('Error switching camera:', error);
+        console.error('Camera switch failed:', error);
         updateStatus('Failed to switch camera');
     }
 }
+let controlsTimeout;
+        function showControls() {
+            const controls = document.querySelector('.controls');
+            controls.classList.add('visible');
+            
+            // Clear existing timeout
+            if (controlsTimeout) {
+                clearTimeout(controlsTimeout);
+            }
+            
+            // Set new timeout to hide controls after 3 seconds
+            controlsTimeout = setTimeout(() => {
+                controls.classList.remove('visible');
+            }, 3000);
+        }
 
 // Utility functions
 function updateStatus(message) {
@@ -776,6 +821,8 @@ function handlePeerDisconnect() {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize PeerJS
     initializePeer();
+    lockScreenOrientation();
+    videoGrid.addEventListener('click', showControls);
 
     // Call button
     callBtn.addEventListener('click', () => {
@@ -797,7 +844,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Video controls
-    document.querySelector('.pip-video').addEventListener('click', switchVideos);
+    document.querySelector('.toggle-pip').addEventListener('click', async () => {
+        try {
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+            } else if (document.pictureInPictureEnabled) {
+                await mainVideo.requestPictureInPicture();
+            }
+        } catch (error) {
+            console.error('PiP failed:', error);
+            updateStatus('Picture-in-Picture not supported');
+        }
+    });
     
     document.querySelector('.toggle-video').addEventListener('click', () => {
         isVideoEnabled = !isVideoEnabled;
