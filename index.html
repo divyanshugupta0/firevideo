@@ -316,6 +316,114 @@
           justify-content: center;
           gap: 10px;
       }
+
+
+      .incoming-call-mobile {
+        display: none; /* Hidden by default */
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.9);
+        z-index: 1000;
+        color: white;
+        text-align: center;
+    }
+
+    .caller-info {
+        position: absolute;
+        top: 30%;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 100%;
+    }
+
+    .caller-avatar {
+        width: 80px;
+        height: 80px;
+        background: #444;
+        border-radius: 50%;
+        margin: 0 auto 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 40px;
+    }
+
+    .swipe-controls {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 200px;
+        display: flex;
+        justify-content: space-around;
+        align-items: flex-end;
+        padding-bottom: 50px;
+    }
+
+    .swipe-button {
+        width: 64px;
+        height: 64px;
+        border-radius: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        position: relative;
+        transition: transform 0.3s;
+    }
+
+    .swipe-button::after {
+        content: "";
+        position: absolute;
+        bottom: -40px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 4px;
+        height: 40px;
+        background: currentColor;
+    }
+
+    .swipe-accept {
+        background: #4CAF50;
+        color: #4CAF50;
+    }
+
+    .swipe-decline {
+        background: #dc3545;
+        color: #dc3545;
+    }
+
+    .swipe-arrow {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        font-size: 24px;
+        animation: bounce 1s infinite;
+    }
+
+    @keyframes bounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+    }
+
+    /* Hide mobile UI on desktop */
+    @media (min-width: 769px) {
+        .incoming-call-mobile {
+            display: none !important;
+        }
+    }
+
+    /* Show mobile UI on mobile devices */
+    @media (max-width: 768px) {
+        #incoming-call-modal {
+            display: none !important;
+        }
+    }
     </style>
 </head>
 <body>
@@ -372,15 +480,37 @@
         <button id="deny-permission" style="background-color: #dc3545;">Deny</button>
     </div>
 
-    <div id="incoming-call-modal" class="modal">
-        <h3>Incoming Call</h3>
-        <p id="incoming-call-type">Video call incoming...</p>
-        <button id="accept-call" style="background-color: #4CAF50;">Accept</button>
-        <button id="reject-call" style="background-color: #dc3545;">Reject</button>
+    <div class="incoming-call-mobile">
+        <div class="caller-info">
+            <div class="caller-avatar">👤</div>
+            <h2>Incoming Call</h2>
+            <p id="mobile-call-type">Video call incoming...</p>
+        </div>
+        <div class="swipe-controls">
+            <div class="swipe-button swipe-decline" id="mobile-decline">📞</div>
+            <div class="swipe-button swipe-accept" id="mobile-accept">📞</div>
+        </div>
+        <div class="swipe-arrow">↑</div>
     </div>
+    <!-- Update your modal HTML structure -->
+<div id="incoming-call-modal" class="modal">
+    <h3>Incoming Call</h3>
+    <p id="incoming-call-type">Video call incoming...</p>
+    <button id="accept-call" style="background-color: #4CAF50;">Accept</button>
+    <button id="reject-call" style="background-color: #dc3545;">Reject</button>
+</div>
+
+<div class="modal-backdrop"></div>
 
     <div class="modal-backdrop"></div>
     <video id="pipVideo" autoplay playsinline></video>
+
+    <audio id="ringtone" loop>
+        <source src="https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.7/sounds/bell_ring.mp3" type="audio/mpeg">
+    </audio>
+    <audio id="calling-tone" loop>
+        <source src="https://cdnjs.cloudflare.com/ajax/libs/ion-sound/3.0.7/sounds/bell_ring.mp3" type="audio/mpeg">
+    </audio>
 
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
@@ -441,22 +571,85 @@ function initializePeer() {
     });
 
     // Updated incoming call handling
-    peer.on('call', async (call) => {
-        console.log('Incoming call detected');
-        updateStatus('Incoming call...');
-        
-        // Show incoming call modal
-        document.getElementById('incoming-call-modal').style.display = 'block';
-        document.querySelector('.modal-backdrop').style.display = 'block';
+    // Update the peer.on('call') handler in initializePeer function
+peer.on('call', async (call) => {
+    console.log('Incoming call detected');
+    updateStatus('Incoming call...');
+    currentCall = call;
+    playRingtone();//start playing ringtone
+    
+    const isMobile = window.innerWidth <= 768;
+    
+    if (isMobile) {
+        // Mobile UI handling
+        const mobileUI = document.querySelector('.incoming-call-mobile');
+        mobileUI.style.display = 'block';
+        document.getElementById('mobile-call-type').textContent = 
+            call.metadata?.isAudioOnly ? 'Audio call incoming...' : 'Video call incoming...';
+    
+            // Handle mobile swipe for accept
+    document.getElementById('mobile-accept').addEventListener('touchstart', handleTouchStart);
+    document.getElementById('mobile-accept').addEventListener('touchmove', handleTouchMove);
+    document.getElementById('mobile-accept').addEventListener('touchend', async (e) => {
+        if (activeButton && activeButton.id === 'mobile-accept') {
+            const translateY = new WebKitCSSMatrix(window.getComputedStyle(activeButton).transform).m42;
+            if (Math.abs(translateY) > 80) {
+                stopRingtone();
+                mobileUI.style.display = 'none';
+                try {
+                    if (!localStream) {
+                        const success = await setupMediaStream();
+                        if (!success) throw new Error('Failed to setup media stream');
+                    }
+                    call.answer(localStream);
+                    currentCall = call;
+                    handleCall(call);
+                    updateStatus('Call connected');
+                } catch (error) {
+                    console.error('Error accepting call:', error);
+                    updateStatus('Failed to accept call');
+                }
+            }
+            activeButton.style.transform = '';
+            activeButton = null;
+        }
+    });
+
+    // Handle mobile swipe for decline
+    document.getElementById('mobile-decline').addEventListener('touchstart', handleTouchStart);
+    document.getElementById('mobile-decline').addEventListener('touchmove', handleTouchMove);
+    document.getElementById('mobile-decline').addEventListener('touchend', (e) => {
+        if (activeButton && activeButton.id === 'mobile-decline') {
+            const translateY = new WebKitCSSMatrix(window.getComputedStyle(activeButton).transform).m42;
+            if (Math.abs(translateY) > 80) {
+                stopRingtone();
+                mobileUI.style.display = 'none';
+                call.close();
+                updateStatus('Call rejected');
+            }
+            activeButton.style.transform = '';
+            activeButton = null;
+        }
+    });
+        } else {
+        // Desktop UI handling
+        const desktopModal = document.getElementById('incoming-call-modal');
+        const modalBackdrop = document.querySelector('.modal-backdrop');
         
         // Update call type text
         document.getElementById('incoming-call-type').textContent = 
             call.metadata?.isAudioOnly ? 'Audio call incoming...' : 'Video call incoming...';
         
+        // Show the modal and backdrop
+        desktopModal.style.display = 'block';
+        modalBackdrop.style.display = 'block';
+        
         // Handle accept call
         document.getElementById('accept-call').onclick = async () => {
+            stopRingtone();
             try {
-                hideModal(document.getElementById('incoming-call-modal'));
+                desktopModal.style.display = 'none';
+                modalBackdrop.style.display = 'none';
                 
                 if (!localStream) {
                     const success = await setupMediaStream();
@@ -464,7 +657,6 @@ function initializePeer() {
                 }
                 
                 call.answer(localStream);
-                currentCall = call;
                 handleCall(call);
                 updateStatus('Call connected');
             } catch (error) {
@@ -475,14 +667,14 @@ function initializePeer() {
 
         // Handle reject call
         document.getElementById('reject-call').onclick = () => {
-            hideModal(document.getElementById('incoming-call-modal'));
+            desktopModal.style.display = 'none';
+            modalBackdrop.style.display = 'none';
             call.close();
+            stopRingtone();
             updateStatus('Call rejected');
         };
-    });
-
-    peer.on('error', handlePeerError);
-    peer.on('disconnected', handlePeerDisconnect);
+    }
+});
 }
 // Update setupMediaStream to ensure proper constraints
 async function setupMediaStream() {
@@ -619,7 +811,7 @@ async function handleIncomingCall(call) {
                 isAudioOnly: isAudioOnly
             }
         };
-
+        playCallingTone();
         updateStatus('Initiating call...');
         const call = peer.call(peerId, localStream, callOptions);
         
@@ -634,6 +826,7 @@ async function handleIncomingCall(call) {
     } catch (error) {
         console.error('Call error:', error);
         updateStatus(error.message || 'Call failed');
+        stopCallingTone();
         
         // Clean up if needed
         if (localStream) {
@@ -646,26 +839,22 @@ async function handleIncomingCall(call) {
 async function handleCall(call) {
     call.on('stream', async (stream) => {
         console.log('Received remote stream');
+        stopCallingTone();
         remoteStream = stream;
         
         try {
             if (mainVideo.srcObject !== stream) {
                 mainVideo.srcObject = stream;
                 mainVideo.muted = false;
-                mainVideo.volume = 1;
-                
-                // Wait for loadedmetadata before playing
-                await new Promise((resolve) => {
-                    mainVideo.onloadedmetadata = resolve;
-                });
-                
-                await mainVideo.play();
+                await mainVideo.play().catch(console.error);
             }
 
-            // Ensure audio is enabled
-            stream.getAudioTracks().forEach(track => {
-                track.enabled = true;
-            });
+            // Ensure pip video shows local stream
+            if (pipVideo.srcObject !== localStream) {
+                pipVideo.srcObject = localStream;
+                pipVideo.muted = true;
+                await pipVideo.play().catch(console.error);
+            }
 
             updateStatus('Connected');
         } catch (error) {
@@ -674,8 +863,20 @@ async function handleCall(call) {
         }
     });
 
-    call.on('close', cleanup);
-    call.on('error', cleanup);
+    call.on('close', () => {
+        cleanup();
+        updateStatus('Call ended');
+        stopCallingTone();
+        stopRingtone();
+    });
+
+    call.on('error', (err) => {
+        console.error('Call error:', err);
+        cleanup();
+        updateStatus('Call error occurred');
+        stopCallingTone();
+        stopRingtone();
+    });
 }
 
 
@@ -691,6 +892,8 @@ async function lockScreenOrientation() {
 
 
 function cleanup() {
+    stopCallingTone();
+        stopRingtone();
     if (remoteStream) {
         remoteStream.getTracks().forEach(track => track.stop());
     }
@@ -762,15 +965,55 @@ function updateStatus(message) {
     statusMessage.textContent = message;
 }
 
+// Update the utility functions for showing/hiding modals
 function showModal(modalElement) {
-    modalElement.style.display = 'block';
-    document.querySelector('.modal-backdrop').style.display = 'block';
+    if (modalElement) {
+        modalElement.style.display = 'block';
+        document.querySelector('.modal-backdrop').style.display = 'block';
+    }
 }
 
 function hideModal(modalElement) {
-    modalElement.style.display = 'none';
-    document.querySelector('.modal-backdrop').style.display = 'none';
+    if (modalElement) {
+        modalElement.style.display = 'none';
+        document.querySelector('.modal-backdrop').style.display = 'none';
+    }
 }
+
+// Add event listeners for modal backdrop
+document.addEventListener('DOMContentLoaded', () => {
+    const modalBackdrop = document.querySelector('.modal-backdrop');
+    
+    modalBackdrop.addEventListener('click', (event) => {
+        if (event.target === modalBackdrop) {
+            const desktopModal = document.getElementById('incoming-call-modal');
+            hideModal(desktopModal);
+            if (currentCall) {
+                currentCall.close();
+                updateStatus('Call rejected');
+            }
+        }
+    });
+});
+
+// Add resize handler for responsive behavior
+window.addEventListener('resize', () => {
+    const isMobile = window.innerWidth <= 768;
+    const desktopModal = document.getElementById('incoming-call-modal');
+    const mobileUI = document.querySelector('.incoming-call-mobile');
+    
+    if (currentCall) {
+        if (isMobile) {
+            desktopModal.style.display = 'none';
+            mobileUI.style.display = 'block';
+        } else {
+            desktopModal.style.display = 'block';
+            mobileUI.style.display = 'none';
+        }
+    }
+});
+
+
 
 function switchVideos() {
     const temp = mainVideo.srcObject;
@@ -780,6 +1023,8 @@ function switchVideos() {
 }
 
 function endCall() {
+    stopCallingTone();
+        stopRingtone();
     if (currentCall) {
         currentCall.close();
     }
@@ -895,6 +1140,103 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+
+    let touchStartY = 0;
+        let activeButton = null;
+
+        function handleIncomingCall(call) {
+            if (window.innerWidth <= 768) {
+                // Show mobile UI
+                document.querySelector('.incoming-call-mobile').style.display = 'block';
+                document.getElementById('mobile-call-type').textContent = 
+                    call.metadata?.isAudioOnly ? 'Audio call incoming...' : 'Video call incoming...';
+                
+                setupMobileSwipeHandlers();
+            } else {
+                // Show desktop UI
+                showModal(incomingCallModal);
+            }
+        }
+
+        function setupMobileSwipeHandlers() {
+            const acceptBtn = document.getElementById('mobile-accept');
+            const declineBtn = document.getElementById('mobile-decline');
+
+            [acceptBtn, declineBtn].forEach(btn => {
+                btn.addEventListener('touchstart', handleTouchStart);
+                btn.addEventListener('touchmove', handleTouchMove);
+                btn.addEventListener('touchend', handleTouchEnd);
+            });
+        }
+
+        function handleTouchStart(e) {
+            touchStartY = e.touches[0].clientY;
+            activeButton = e.target.closest('.swipe-button');
+        }
+
+        function handleTouchMove(e) {
+            if (!activeButton) return;
+            
+            const touchY = e.touches[0].clientY;
+            const deltaY = touchStartY - touchY;
+            
+            if (deltaY > 0) {
+                activeButton.style.transform = `translateY(-${Math.min(deltaY, 100)}px)`;
+            }
+        }
+
+        function handleTouchEnd() {
+            if (!activeButton) return;
+            
+            const translateY = new WebKitCSSMatrix(window.getComputedStyle(activeButton).transform).m42;
+            
+            if (Math.abs(translateY) > 80) {
+                // Swipe completed
+                if (activeButton.id === 'mobile-accept') {
+                    acceptCall();
+                } else {
+                    rejectCall();
+                }
+            }
+            
+            // Reset position
+            activeButton.style.transform = '';
+            activeButton = null;
+        }
+
+        function acceptCall() {
+            document.querySelector('.incoming-call-mobile').style.display = 'none';
+            // Your existing accept call logic
+        }
+
+        function rejectCall() {
+            document.querySelector('.incoming-call-mobile').style.display = 'none';
+            // Your existing reject call logic
+        }
+
+
+        let ringtone = document.getElementById('ringtone');
+let callingTone = document.getElementById('calling-tone');
+
+function playRingtone() {
+    ringtone.currentTime = 0;
+    ringtone.play().catch(error => console.log('Playback prevented:', error));
+}
+
+function stopRingtone() {
+    ringtone.pause();
+    ringtone.currentTime = 0;
+}
+
+function playCallingTone() {
+    callingTone.currentTime = 0;
+    callingTone.play().catch(error => console.log('Playback prevented:', error));
+}
+
+function stopCallingTone() {
+    callingTone.pause();
+    callingTone.currentTime = 0;
+}   
     </script>
     
     </body>
